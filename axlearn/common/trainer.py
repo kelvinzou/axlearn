@@ -396,6 +396,13 @@ class SpmdTrainer(Module):
                     if self.step >= cfg.max_step:
                         self._step_log("Reached max_step=%s. Stopping", cfg.max_step)
                         break
+                    summary_time = time.perf_counter()
+                    time_to_summary = summary_time-time_after_run_step
+                    logging.log_if(logging.INFO, 
+                                   "Current summary time: %s seconds at step %d", 
+                                   time_to_summary > 100,
+                                   time_to_summary, self.step)
+                    per_step_timer = summary_time
                 if self.step < cfg.max_step:
                     self._step_log("Reached end of inputs. Stopping")
             self._step_log("Checkpointer flushed.")
