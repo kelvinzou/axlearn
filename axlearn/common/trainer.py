@@ -353,11 +353,22 @@ class SpmdTrainer(Module):
                 num_steps = 0
                 output = None
                 stop_trace_step = None
+                per_step_timer = time.perf_counter()
 
                 for input_batch in self._input_iter:
                     logging.log_first_n(
                         logging.INFO, "input_batch=%s", 3, utils.shapes(input_batch)
                     )
+                    logging.log_first_n(
+                        logging.INFO, "Using customized axlearn!!", 1)
+
+                    # Checking the time to fetch input, set at 0.1 second.
+                    time_after_input = time.perf_counter()
+                    time_fetch_input = time_after_input-per_step_timer
+                    logging.log_if(logging.INFO, 
+                                   "Current input time: %s seconds at step %d", 
+                                   time_fetch_input > 0.1,
+                                   time_fetch_input, self.step)
 
                     # Stop or start tracing if necessary.
                     stop_trace_step = self._maybe_stop_or_start_tracing(stop_trace_step, output)
@@ -366,6 +377,14 @@ class SpmdTrainer(Module):
                     self.vlog(3, "Start step %s", self.step)
                     output = self._run_step(utils.host_to_global_device_array(input_batch))
                     self.vlog(3, "Done step %s", self.step)
+                    # Checking the time to run step, set at 60 seconds.
+                    time_after_run_step = time.perf_counter()
+                    time_run_step = time_after_run_step-time_after_input
+                    logging.log_if(logging.INFO, 
+                                   "Current run time: %s seconds at step %d", 
+                                   time_run_step > 60,
+                                   time_run_step, self.step)
+
                     num_steps += 1
                     if num_steps % 100 == 0:
                         now = time.perf_counter()
