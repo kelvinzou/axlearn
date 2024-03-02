@@ -354,7 +354,7 @@ class SpmdTrainer(Module):
                 output = None
                 stop_trace_step = None
                 per_step_timer = time.perf_counter()
-
+                average_step_time = -1
                 for input_batch in self._input_iter:
                     logging.log_first_n(
                         logging.INFO, "input_batch=%s", 3, utils.shapes(input_batch)
@@ -377,13 +377,6 @@ class SpmdTrainer(Module):
                     self.vlog(3, "Start step %s", self.step)
                     output = self._run_step(utils.host_to_global_device_array(input_batch))
                     self.vlog(3, "Done step %s", self.step)
-                    # Checking the time to run step, set at 60 seconds.
-                    time_after_run_step = time.perf_counter()
-                    time_run_step = time_after_run_step-time_after_input
-                    logging.log_if(logging.INFO, 
-                                   "Current run time: %s seconds at step %d", 
-                                   time_run_step > 60,
-                                   time_run_step, self.step)
 
                     num_steps += 1
                     if num_steps % 100 == 0:
@@ -393,6 +386,14 @@ class SpmdTrainer(Module):
                         self.summary_writer(self.step, {"average_step_time": average_step_time})
                         num_steps = 0
                         start_time = now
+
+                    # Checking the time to run step, set at 60 seconds.
+                    time_after_run_step = time.perf_counter()
+                    time_run_step = time_after_run_step-time_after_input
+                    logging.log_if(logging.INFO, 
+                                   "Current run time: %s seconds at step %d", 
+                                   time_run_step > average_step_time * 2 and average_step_time > 0,
+                                   time_run_step, self.step)
                     if self.step >= cfg.max_step:
                         self._step_log("Reached max_step=%s. Stopping", cfg.max_step)
                         break
