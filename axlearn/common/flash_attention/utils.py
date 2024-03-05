@@ -9,10 +9,10 @@ import jax.numpy as jnp
 from absl import logging
 from jax.experimental.pallas.ops.tpu.flash_attention import BlockSizes
 
-from axlearn.common.attention import NEG_INF
-from axlearn.common.flash_attention.tpu_attention import flash_attention as tpu_flash_attention
-from axlearn.common.utils import Tensor
+# from axlearn.common.utils import Tensor
+from jax import Array as Tensor
 
+NEG_INF = -1e15
 
 @functools.partial(jax.jit, static_argnames=["causal", "softmax_scale"])
 @jax.default_matmul_precision("bfloat16")
@@ -90,6 +90,7 @@ def flash_attention_implementation(
         return jit_attn
 
     elif backend == "tpu":
+        from axlearn.common.flash_attention.tpu_attention import flash_attention as tpu_flash_attention
         # TODO(tom_gunter): See if we can do better block-size tuning.
         block_sizes = BlockSizes(
             block_q=block_size,
