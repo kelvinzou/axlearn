@@ -35,9 +35,9 @@ import jax
 import jax.numpy as jnp
 
 # pytype: disable=import-error  # pylint: disable=import-error
-# import jax_triton as jt
+import jax_triton as jt
 from jax import lax
-from jax.experimental import pallas as pl
+from jax_triton import pallas as pl
 
 # pytype: enable=import-error  # pylint: enable=import-error
 
@@ -146,7 +146,7 @@ def _mha_forward_kernel(
     if causal:
         upper_bound = lax.div(block_q * start_q, block_k) + 1
     else:
-        upper_bound = pl.cdiv(seq_len, block_k)
+        upper_bound = jt.cdiv(seq_len, block_k)
     acc, m_i, l_i = lax.fori_loop(0, upper_bound, body, (acc, m_i, l_i))
 
     if residual_refs:
@@ -212,7 +212,7 @@ def flash_attention(
     # Heuristics.
     grid_ = grid
     if grid_ is None:
-        grid_ = (pl.cdiv(seq_len, block_q), batch_size, num_heads)
+        grid_ = (jt.cdiv(seq_len, block_q), batch_size, num_heads)
 
     # Bias.
     bias_type = "none"
@@ -280,7 +280,7 @@ def _mha_forward(
     # Heuristics.
     grid_ = grid
     if grid_ is None:
-        grid_ = (pl.cdiv(seq_len, block_q), batch_size, num_heads)
+        grid_ = (jt.cdiv(seq_len, block_q), batch_size, num_heads)
 
     # Bias.
     bias_type = "none"
@@ -377,7 +377,7 @@ def _preprocess_backward(
     ]
     do_scaled, delta = pl.pallas_call(
         functools.partial(_preprocess_backward_kernel, block_q=block_q),
-        grid=(pl.cdiv(seq_len, block_q), batch_size, num_heads),
+        grid=(jt.cdiv(seq_len, block_q), batch_size, num_heads),
         in_specs=[
             pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
             pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
@@ -513,11 +513,11 @@ def _mha_backward_kernel(
             lower_bound = lax.div(start_k * block_k, block_q)
         else:
             lower_bound = 0
-        dv, dk = lax.fori_loop(lower_bound, pl.cdiv(seq_len, block_q), inner_loop, (dv, dk))
+        dv, dk = lax.fori_loop(lower_bound, jt.cdiv(seq_len, block_q), inner_loop, (dv, dk))
         pl.store(dv_ref, (pl.ds(start_k * block_k, block_k), slice(None)), dv.astype(dv_ref.dtype))
         pl.store(dk_ref, (pl.ds(start_k * block_k, block_k), slice(None)), dk.astype(dk_ref.dtype))
 
-    lax.fori_loop(0, pl.cdiv(seq_len, block_k), outer_loop, None)
+    lax.fori_loop(0, jt.cdiv(seq_len, block_k), outer_loop, None)
 
 
 def _mha_backward(
