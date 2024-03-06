@@ -131,7 +131,7 @@ def test_bwd_against_ref(
     else:
         bias = None
 
-    assert str(q.device()) == "gpu:0"
+    assert str(q.device()) == "cuda:0"
     sm_scale = q.shape[-1] ** -0.5
 
     # Compare outputs.
