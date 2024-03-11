@@ -84,8 +84,8 @@ def _perf_report(prefix: str):
         x_names=["batch_size"],
         x_vals=[2, 4, 8, 16],
         line_arg="library",
-        line_vals=["jax", "jax-triton", "jax-pallas"],
-        line_names=["Jax", "Jax Triton", "Pallas"],
+        line_vals=["jax", "jax-triton",], # "jax-pallas"
+        line_names=["Jax", "Jax Triton",], # "Pallas"
         styles=[("blue", "-"), ("purple", "-")],
         ylabel="ms",
         plot_name=f"{prefix}-head{num_heads}-seq1024-d{per_head_dim}",
@@ -94,10 +94,10 @@ def _perf_report(prefix: str):
     # Vary num heads for fixed batch and seq length.
     num_heads_bench = triton.testing.Benchmark(
         x_names=["num_heads"],
-        x_vals=[12, 16, 32, 40, 56, 72],
+        x_vals=[12, 16, 32, 40, 48, 72],
         line_arg="library",
-        line_vals=["jax", "jax-triton", "jax-pallas"],
-        line_names=["Jax", "Jax Triton", "Pallas"],
+        line_vals=["jax", "jax-triton",], # "jax-pallas"
+        line_names=["Jax", "Jax Triton", ], #"Pallas"
         styles=[("blue", "-"), ("purple", "-")],
         ylabel="ms",
         plot_name=f"{prefix}-batch{batch_size}-seq{seq_len}-d{per_head_dim}",
@@ -106,10 +106,10 @@ def _perf_report(prefix: str):
     # Vary seq length for fixed heads and batch size.
     seq_len_bench = triton.testing.Benchmark(
         x_names=["seq_len"],
-        x_vals=[2**i for i in range(7, 12)],  # 128 to 2048.
+        x_vals=[2**i for i in range(7, 14)],  # 128 to 8192.
         line_arg="library",
-        line_vals=["jax", "jax-triton", "jax-pallas"],
-        line_names=["Jax", "Jax Triton", "Pallas"],
+        line_vals=["jax", "jax-triton", ], #"jax-pallas"
+        line_names=["Jax", "Jax Triton", ], #"Pallas"
         styles=[("blue", "-"), ("purple", "-")],
         ylabel="ms",
         plot_name=f"{prefix}-batch{batch_size}-head{num_heads}-d{per_head_dim}",
@@ -120,8 +120,8 @@ def _perf_report(prefix: str):
         x_names=["per_head_dim"],
         x_vals=[16, 32, 64, 128],
         line_arg="library",
-        line_vals=["jax", "jax-triton", "jax-pallas"],
-        line_names=["Jax", "Jax Triton", "Pallas"],
+        line_vals=["jax", "jax-triton", ], #"jax-pallas"
+        line_names=["Jax", "Jax Triton", ], #"Pallas"
         styles=[("blue", "-"), ("purple", "-")],
         ylabel="ms",
         plot_name=f"{prefix}-batch{batch_size}-head{num_heads}-seq{seq_len}",
@@ -184,9 +184,10 @@ def bench_flash_attention_backward(
         v = jax.random.normal(
             jax.random.PRNGKey(2), (batch_size, seq_len, num_heads, per_head_dim), dtype=jnp.float16
         )
-        bias = jax.random.normal(
-            jax.random.PRNGKey(3), (batch_size, num_heads, seq_len, seq_len), dtype=jnp.float16
-        )
+        bias = None
+        #  bias = jax.random.normal(
+        #     jax.random.PRNGKey(3), (batch_size, num_heads, seq_len, seq_len), dtype=jnp.float16
+        # )
 
         if "triton" in library:
 
@@ -196,7 +197,6 @@ def bench_flash_attention_backward(
 
             test_bwd = jax.grad(test_fn, argnums=(0, 1, 2))
             fn = lambda: test_bwd(q, k, v, bias)
-            
         elif "pallas" in library:
             @jax.jit
             def pallas_fn(q, k, v, bias):

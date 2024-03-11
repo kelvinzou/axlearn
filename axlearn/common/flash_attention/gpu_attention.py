@@ -556,8 +556,6 @@ def _mha_backward(
     batch_size, seq_len, num_heads, head_dim = q.shape
     block_q = min(block_q, seq_len)
     block_k = min(block_k, seq_len)
-    block_k /= 4
-    block_q /= 4
     do_scaled, delta = _preprocess_backward(out, do, l, block_q, debug, interpret)
 
     # NOTE: temporarily removed the "xla" branch, which seems unused.
@@ -569,18 +567,7 @@ def _mha_backward(
             jax.ShapeDtypeStruct(k.shape, k.dtype),
             jax.ShapeDtypeStruct(v.shape, v.dtype),
         ]
-        in_specs = [
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # query
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # key
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # value
-                bias_block_spec,  # bias
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
-                pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
-                pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
-                pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
-            ]
+
         # Bias.
         bias_type = "none"
         bias_block_spec = None
@@ -594,7 +581,18 @@ def _mha_backward(
             )
             # We have one more non-None input (i.e., in_specs has another tree_leaf).
             input_output_aliases = {9: 0}
-
+        in_specs = [
+                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # query
+                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # key
+                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # value
+                bias_block_spec,  # bias
+                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+                pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
+                pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
+                pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
+                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+            ]
         grid = (batch_size, num_heads)
         # TODO(markblee): num_warps=8 seems to work from basic testing, confirm the below comment.
         # TODO(sharadmv): figure out why num_warps=8 doesn't work!
