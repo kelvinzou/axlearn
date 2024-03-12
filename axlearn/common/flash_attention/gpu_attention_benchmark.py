@@ -77,7 +77,7 @@ from axlearn.common.flash_attention.utils import mha_reference
 from jax.experimental.pallas.ops.attention import mha as pallas_mha
 
 def _perf_report(prefix: str):
-    batch_size, num_heads, seq_len, per_head_dim = 2, 32, 2048, 64
+    batch_size, num_heads, seq_len, per_head_dim = 2, 48, 2048, 64
 
     # Vary batch size for fixed heads and seq length.
     batch_size_bench = triton.testing.Benchmark(
@@ -94,7 +94,7 @@ def _perf_report(prefix: str):
     # Vary num heads for fixed batch and seq length.
     num_heads_bench = triton.testing.Benchmark(
         x_names=["num_heads"],
-        x_vals=[12, 16, 32, 40, 48, 72],
+        x_vals=[12, 16, 32, 48, 72],
         line_arg="library",
         line_vals=["jax", "jax-triton","jax-pallas"], 
         line_names=["Jax", "Jax Triton", "Pallas"],
@@ -149,9 +149,10 @@ def bench_flash_attention(
         v = jax.random.normal(
             jax.random.PRNGKey(2), (batch_size, seq_len, num_heads, per_head_dim), dtype=jnp.float16
         )
-        bias = jax.random.normal(
-            jax.random.PRNGKey(2), (batch_size, num_heads, seq_len, seq_len), dtype=jnp.float16
-        )
+        bias = None
+        #jax.random.normal(
+         #   jax.random.PRNGKey(2), (batch_size, num_heads, seq_len, seq_len), dtype=jnp.float16
+        #)
 
         if "triton" in library:
             fn = lambda: flash_attention(q, k, v, bias)
