@@ -106,7 +106,7 @@ def _perf_report(prefix: str):
     # Vary seq length for fixed heads and batch size.
     seq_len_bench = triton.testing.Benchmark(
         x_names=["seq_len"],
-        x_vals=[2**i for i in range(7, 14)],  # 128 to 8192.
+        x_vals=[2**i for i in range(9, 13)],  # 512 to 4096.
         line_arg="library",
         line_vals=["jax", "jax-triton", "jax-pallas"],
         line_names=["Jax", "Jax Triton", "Pallas"],

@@ -90,7 +90,7 @@ def _mha_forward_kernel(
 
     # acc is the buffer where we accumulate the output on sram.
     # m_i and l_i (see FlashAttention paper) are updated during the k,v loop.
-    m_i = jnp.zeros(block_q, dtype=jnp.float32) - DEFAULT_MASK_VALUE
+    m_i = jnp.zeros(block_q, dtype=jnp.float32) + DEFAULT_MASK_VALUE
     l_i = jnp.zeros(block_q, dtype=jnp.float32)
     # acc is the buffer where we accumulate the output on sram.
     acc = jnp.zeros((block_q, block_d), dtype=jnp.float32)
@@ -100,6 +100,9 @@ def _mha_forward_kernel(
     # q tile has shape [block_q, block_d], block_d == head_dim.
     curr_q_slice = pl.dslice(start_q * block_q, block_q)
     q = pl.load(q_ref, (curr_q_slice, pl.dslice(None)))
+
+    # TODO: fix the segment mask for the case where seq length is not the whole
+    # context.
 
     # In FlashAttention algorithm 1 there are 2 loops: slow over tiles of kv (size
     # Bc == block_k here), and fast over blocks of q (size Br == block_q here).
@@ -140,9 +143,9 @@ def _mha_forward_kernel(
         
         m_curr = qk.max(axis=-1)
         m_next = jnp.maximum(m_curr, m_prev)
-        correction = jnp.exp2(m_prev - m_next)
+        correction = jnp.exp(m_prev - m_next)
         l_prev = l_prev * correction
-        p = jnp.exp2(qk - m_next[:, None])
+        p = jnp.exp(qk - m_next[:, None])
         l_next = jnp.sum(p, axis=1) + l_prev
 
         l_rcp = 1.0 / l_next
@@ -507,7 +510,7 @@ def _mha_backward_kernel(
                 span_q = start_q * block_q + jnp.arange(block_q)
                 qk = jnp.where(span_q[:, None] >= span_k[None, :], qk, DEFAULT_MASK_VALUE)
 
-            p = jnp.exp2(qk - m[:, None])
+            p = jnp.exp(qk - m[:, None])
             dv = dv + pl.dot(p.astype(do.dtype).T, do)
             dp = jnp.zeros((block_q, block_k), dtype=jnp.float32) - di[:, None]
             dp = dp + pl.dot(do, v.T)
