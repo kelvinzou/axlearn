@@ -101,6 +101,8 @@ def _mha_forward_kernel(
     curr_q_slice = pl.dslice(start_q * block_q, block_q)
     q = pl.load(q_ref, (curr_q_slice, pl.dslice(None)))
 
+    # This is to make exp2 work.
+    qk_scale = softmax_scale * 1.44269504
     # TODO: fix the segment mask for the case where seq length is not the whole
     # context.
 
@@ -116,11 +118,16 @@ def _mha_forward_kernel(
         
         # qk = jnp.zeros([block_q, block_k], dtype=jnp.float32)
         # qk += pl.dot(q, k.T)  # [block_q, block_k].
-        qk = pl.dot(q, k.T)  # [block_q, block_k].
-
         if softmax_scale != 1.0:
-            qk *= softmax_scale  # [block_q, block_k].
-
+            q *= softmax_scale
+        q *= qk_scale
+        qk = jnp.zeros([block_q, block_k], dtype=jnp.float32)
+        # TODO: fix the segment mask for the case where seg length is not seq_len.
+        if causal:
+            span_q = start_q * block_q + jnp.arange(block_q)
+            span_k = start_k * block_k + jnp.arange(block_k)
+            qk = jnp.where(span_q[:, None] >= span_k[None, :], qk, DEFAULT_MASK_VALUE)
+        qk += pl.dot(q, k.T)  # [block_q, block_k].
         # TODO(markblee): Support 'vector'.
         if bias_type == "matrix":
             b = pl.load(
@@ -129,22 +136,15 @@ def _mha_forward_kernel(
             )
             qk += b
 
-        # TODO: fix the segment mask for the case where seg length is not seq_len.
-        if causal:
-            span_q = start_q * block_q + jnp.arange(block_q)
-            span_k = start_k * block_k + jnp.arange(block_k)
-            qk = jnp.where(span_q[:, None] >= span_k[None, :], qk, DEFAULT_MASK_VALUE)
-
         # Bring closer to XLA:GPU numerics.
         # These casts are needed to avoid precision issues.
         # qk = qk.astype(q_ref.dtype)
         qk = qk.astype(jnp.float32)
-        
         m_curr = qk.max(axis=-1)
         m_next = jnp.maximum(m_curr, m_prev)
-        correction = jnp.exp(m_prev - m_next)
+        correction = jnp.exp2(m_prev - m_next)
         l_prev = l_prev * correction
-        p = jnp.exp(qk - m_next[:, None])
+        p = jnp.exp2(qk - m_next[:, None])
         l_next = jnp.sum(p, axis=1) + l_prev
 
         l_rcp = 1.0 / l_next
@@ -239,7 +239,7 @@ def flash_attention(
         num_warps_ = 4 if head_dim <= 64 else 8
     num_stages_ = num_stages
     if num_stages_ is None:
-        num_stages_ = 2 if head_dim <= 64 else 1
+        num_stages_ = 4
     kernel = functools.partial(
         _mha_forward_kernel,
         softmax_scale=softmax_scale,
@@ -309,7 +309,7 @@ def _mha_forward(
         num_warps_ = 4 if head_dim <= 64 else 8
     num_stages_ = num_stages
     if num_stages is None:
-        num_stages_ = 2 if head_dim <= 64 else 1
+        num_stages_ = 4
     kernel = functools.partial(
         _mha_forward_kernel,
         softmax_scale=softmax_scale,
@@ -402,8 +402,8 @@ def _preprocess_backward(
             pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
             pl.BlockSpec(lambda _, j, k: (j, k, 0), (None, None, seq_len)),
         ],
-        num_warps=4,
-        num_stages=3,
+        num_warps=8,
+        num_stages=4,
         out_shape=out_shape,
         debug=debug,
         interpret=interpret,
@@ -430,6 +430,7 @@ def _mha_backward_kernel(
     dv_ref,
     *,
     softmax_scale: float,
+    qk_scale: float,
     bias_type: str,
     causal: bool,
     block_q: int,
@@ -464,6 +465,7 @@ def _mha_backward_kernel(
     """
     del out_ref, l_ref  # Not needed
     seq_len = q_ref.shape[0]
+    pid = pl.program_id(0)
 
     def outer_loop(start_k, _):
         dv = jnp.zeros([block_k, block_d], dtype=jnp.float32)
@@ -492,6 +494,7 @@ def _mha_backward_kernel(
 
             if softmax_scale != 1.0:
                 qk *= softmax_scale
+            qk *= qk_scale
 
             if bias_type == "matrix":
                 # Load bias in transposed order, for hopefully better cache efficiency.
@@ -504,7 +507,7 @@ def _mha_backward_kernel(
                 span_k = start_k * block_k + jnp.arange(block_k)
                 qk = jnp.where(span_q[:, None] >= span_k[None, :], qk, DEFAULT_MASK_VALUE)
 
-            p = jnp.exp(qk - m[:, None])
+            p = jnp.exp2(qk - m[:, None])
             dv = dv + pl.dot(p.astype(do.dtype).T, do)
             dp = jnp.zeros((block_q, block_k), dtype=jnp.float32) - di[:, None]
             dp = dp + pl.dot(do, v.T)
@@ -551,8 +554,11 @@ def _mha_backward(
     q, k, v, b, out, l, m = res
 
     batch_size, seq_len, num_heads, head_dim = q.shape
+    # Backward heuristics, using the same block size for block q and block k.
     block_q = min(block_q, seq_len)
-    block_k = min(block_k, seq_len)
+    block_k = min(block_q, seq_len)
+    
+    # Very tiny amount of time, not worth using pallas_call.
     do_scaled, delta = _preprocess_backward(out, do, l, block_q, debug, interpret)
 
     # NOTE: temporarily removed the "xla" branch, which seems unused.
@@ -594,10 +600,12 @@ def _mha_backward(
         # TODO(markblee): num_warps=8 seems to work from basic testing, confirm the below comment.
         # TODO(sharadmv): figure out why num_warps=8 doesn't work!
         num_warps = 8
+        qk_scale = softmax_scale * 1.44269504
         dq, dk, dv = pl.pallas_call(
             functools.partial(
                 _mha_backward_kernel,
                 softmax_scale=softmax_scale,
+                qk_scale=qk_scale,
                 bias_type=bias_type,
                 causal=causal,
                 block_q=block_q,
