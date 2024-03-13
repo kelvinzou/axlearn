@@ -68,7 +68,7 @@ def test_fwd_against_ref(
                 causal=causal,
                 sm_scale=sm_scale,
             )
-            out, _ = jax.vjp(fn, q, k, v)
+            out, _ = jax.vjp(fn, q, k, v, None)
             return out
 
     else:
@@ -134,6 +134,7 @@ def test_bwd_against_ref(
         jax_out = pallas_mha(q, k, v, None, causal=causal, sm_scale=sm_scale)
     else:
        jax_out = flash_attention(q, k, v, bias, causal=causal, softmax_scale=sm_scale)
+    jax_ref_out = mha_reference(q, k, v, bias, causal=causal, softmax_scale=sm_scale)
     chex.assert_trees_all_close(jax_out, jax_ref_out, atol=0.005)
     if use_pallas:
         def fn(q, k, v, bias):
@@ -160,8 +161,7 @@ def test_bwd_against_ref(
                 block_q=block_size,
                 block_k=block_size,
             ).sum()
-            
-    jax_ref_out = mha_reference(q, k, v, bias, causal=causal, softmax_scale=sm_scale)
+
     def ref_fn(q, k, v, bias):
         return mha_reference(q, k, v, bias, causal=causal, softmax_scale=sm_scale).sum()
 

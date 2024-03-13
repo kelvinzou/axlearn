@@ -129,11 +129,10 @@ def _mha_forward_kernel(
             )
             qk += b
 
-        # TODO: fix the segment mask for the case where block_q != block_k.
+        # TODO: fix the segment mask for the case where seg length is not seq_len.
         if causal:
             span_q = start_q * block_q + jnp.arange(block_q)
             span_k = start_k * block_k + jnp.arange(block_k)
-
             qk = jnp.where(span_q[:, None] >= span_k[None, :], qk, DEFAULT_MASK_VALUE)
 
         # Bring closer to XLA:GPU numerics.
@@ -473,9 +472,6 @@ def _mha_backward_kernel(
         k = pl.load(k_ref, (curr_k_slice, slice(None)))
         v = pl.load(v_ref, (curr_k_slice, slice(None)))
 
-        # TODO(markblee): Not needed for non-causal?
-        span_k = start_k * block_k + jnp.arange(block_k)
-
         def inner_loop(start_q, carry):
             dv, dk = carry
             curr_q_slice = pl.ds(start_q * block_q, block_q)
@@ -499,15 +495,13 @@ def _mha_backward_kernel(
 
             if bias_type == "matrix":
                 # Load bias in transposed order, for hopefully better cache efficiency.
-                b = pl.load(
-                    b_ref,
-                    (pl.ds(start_k * block_k, block_k), curr_q_slice),
-                )
+                b = pl.load(b_ref, (curr_k_slice, curr_q_slice))
                 b = b.astype(jnp.float32)
                 qk += b.T  # Transpose back.
 
             if causal:
                 span_q = start_q * block_q + jnp.arange(block_q)
+                span_k = start_k * block_k + jnp.arange(block_k)
                 qk = jnp.where(span_q[:, None] >= span_k[None, :], qk, DEFAULT_MASK_VALUE)
 
             p = jnp.exp(qk - m[:, None])
@@ -532,8 +526,8 @@ def _mha_backward_kernel(
         else:
             lower_bound = 0
         dv, dk = lax.fori_loop(lower_bound, pl.cdiv(seq_len, block_q), inner_loop, (dv, dk))
-        pl.store(dv_ref, (pl.ds(start_k * block_k, block_k), slice(None)), dv.astype(dv_ref.dtype))
-        pl.store(dk_ref, (pl.ds(start_k * block_k, block_k), slice(None)), dk.astype(dk_ref.dtype))
+        pl.store(dv_ref, (curr_k_slice, slice(None)), dv.astype(dv_ref.dtype))
+        pl.store(dk_ref, (curr_k_slice, slice(None)), dk.astype(dk_ref.dtype))
 
     lax.fori_loop(0, pl.cdiv(seq_len, block_k), outer_loop, None)
 
